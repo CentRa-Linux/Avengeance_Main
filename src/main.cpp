@@ -3,7 +3,7 @@
 // i2c Adresses
 // BMX055: ACCELEROMETER:0x19 GYRO:0x69 MAGNETIC:0x13
 // TCA9548A: 0x70
-// S11059-02DT
+// S11059-02DT: 0x2A
 
 #include <Arduino.h>
 #include <Wire.h>
@@ -12,7 +12,10 @@ void setup() {
   Serial.begin(9600);
   Serial.println("This is ESP32, Sending message to PC on Serial Connection.");
 
+  Serial.println("Setting up i2c...");
+  Wire.begin();
   Wire.setClock(400000);
+  Serial.println("i2c Ok!");
 }
 
 void loop() {}
