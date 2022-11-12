@@ -20,6 +20,21 @@
 #define CONTROL_1_LSB 0x89
 #define CONTROL_2_LSB 0x09
 #define SENSOR_REGISTER 0x03
+#define MONO_0 25
+#define MONO_1 26
+#define MONO_2 27
+#define MONO_3 32
+#define MONO_4 33
+#define MONO_5 34
+#define MONO_6 35
+// モータードライバのピン
+#define PWMA 17
+#define PWMB 16
+#define AIN1 4
+#define BIN1 2
+#define AIN2 0
+#define BIN2 15
+// ライントレース系の定数
 
 // センサーの値を保存するグローバル変数
 float xAccl = 0.00;
@@ -35,14 +50,10 @@ float bodyasin = 0.00;
 int xMag = 0;
 int yMag = 0;
 int zMag = 0;
-int RR = 0;
-int RG = 0;
-int RB = 0;
-int RIR = 0;
-int LR = 0;
-int LG = 0;
-int LB = 0;
-int LIR = 0;
+int rColor[4];
+int rHSV[3];
+int lColor[4];
+int lHSV[3];
 int mono[7];
 
 //=====================================================================================//
@@ -255,25 +266,25 @@ void get_color() {
   if (Wire.available()) {
     high_byte = Wire.read(); // high_byteに「赤(上位バイト)」のデータ読み込み
     low_byte = Wire.read(); // high_byteに「赤(下位バイト)」のデータ読み込み
-    RR =
+    rColor[0] =
         high_byte << 8 |
         low_byte; // 1Byte目のデータを8bit左にシフト、OR演算子で2Byte目のデータを結合して、redに代入
 
     high_byte = Wire.read(); // high_byteに「緑(上位バイト)」のデータ読み込み
     low_byte = Wire.read(); // high_byteに「緑(下位バイト)」のデータ読み込み
-    RG =
+    rColor[1] =
         high_byte << 8 |
         low_byte; // 1Byte目のデータを8bit左にシフト、OR演算子で2Byte目のデータを結合して、greenに代入
 
     high_byte = Wire.read(); // high_byteに「青(上位バイト)」のデータ読み込み
     low_byte = Wire.read(); // high_byteに「青(下位バイト)」のデータ読み込み
-    RB =
+    rColor[2] =
         high_byte << 8 |
         low_byte; // 1Byte目のデータを8bit左にシフト、OR演算子で2Byte目のデータを結合して、blueに代入
 
     high_byte = Wire.read(); // high_byteに「赤外(上位バイト)」のデータ読み込み
     low_byte = Wire.read(); // high_byteに「赤外(下位バイト)」のデータ読み込み
-    RIR =
+    rColor[3] =
         high_byte << 8 |
         low_byte; // 1Byte目のデータを8bit左にシフト、OR演算子で2Byte目のデータを結合して、IRに代入
   }
@@ -290,39 +301,104 @@ void get_color() {
   if (Wire.available()) {
     high_byte = Wire.read(); // high_byteに「赤(上位バイト)」のデータ読み込み
     low_byte = Wire.read(); // high_byteに「赤(下位バイト)」のデータ読み込み
-    LR =
+    lColor[0] =
         high_byte << 8 |
         low_byte; // 1Byte目のデータを8bit左にシフト、OR演算子で2Byte目のデータを結合して、redに代入
 
     high_byte = Wire.read(); // high_byteに「緑(上位バイト)」のデータ読み込み
     low_byte = Wire.read(); // high_byteに「緑(下位バイト)」のデータ読み込み
-    LG =
+    lColor[1] =
         high_byte << 8 |
         low_byte; // 1Byte目のデータを8bit左にシフト、OR演算子で2Byte目のデータを結合して、greenに代入
 
     high_byte = Wire.read(); // high_byteに「青(上位バイト)」のデータ読み込み
     low_byte = Wire.read(); // high_byteに「青(下位バイト)」のデータ読み込み
-    LB =
+    lColor[2] =
         high_byte << 8 |
         low_byte; // 1Byte目のデータを8bit左にシフト、OR演算子で2Byte目のデータを結合して、blueに代入
 
     high_byte = Wire.read(); // high_byteに「赤外(上位バイト)」のデータ読み込み
     low_byte = Wire.read(); // high_byteに「赤外(下位バイト)」のデータ読み込み
-    LIR =
+    lColor[3] =
         high_byte << 8 |
         low_byte; // 1Byte目のデータを8bit左にシフト、OR演算子で2Byte目のデータを結合して、IRに代入
   }
   Wire.endTransmission(); // I2Cスレーブ「Arduino Uno」のデータ送信終了
 }
 
+void calculate_color() {}
+
 void get_mono() {
-  mono[0] = analogRead(25);
-  mono[1] = analogRead(26);
-  mono[2] = analogRead(27);
-  mono[3] = analogRead(32);
-  mono[4] = analogRead(33);
-  mono[5] = analogRead(34);
-  mono[6] = analogRead(35);
+  mono[0] = analogRead(MONO_0);
+  mono[1] = analogRead(MONO_1);
+  mono[2] = analogRead(MONO_2);
+  mono[3] = analogRead(MONO_3);
+  mono[4] = analogRead(MONO_4);
+  mono[5] = analogRead(MONO_5);
+  mono[6] = analogRead(MONO_6);
+}
+
+void init_motor() {
+  pinMode(PWMA, OUTPUT);
+  pinMode(PWMB, OUTPUT);
+  pinMode(AIN1, OUTPUT);
+  pinMode(BIN1, OUTPUT);
+  pinMode(AIN2, OUTPUT);
+  pinMode(BIN2, OUTPUT);
+}
+
+void drive_motor(int a, int b) {
+  if (a == 0) {
+    // BRAKE
+    digitalWrite(AIN1, HIGH);
+    digitalWrite(AIN2, HIGH);
+    ledcWrite(PWMA, a);
+  }
+  if (a > 0) {
+    // CW
+    digitalWrite(AIN1, HIGH);
+    digitalWrite(AIN2, LOW);
+    ledcWrite(PWMA, a);
+  }
+  if (a < 0) {
+    // CCW
+    digitalWrite(AIN1, LOW);
+    digitalWrite(AIN2, HIGH);
+    ledcWrite(PWMA, a);
+  }
+  if (b == 0) {
+    // BRAKE
+    digitalWrite(BIN1, HIGH);
+    digitalWrite(BIN2, HIGH);
+    ledcWrite(PWMB, b);
+  }
+  if (b > 0) {
+    // CW
+    digitalWrite(BIN1, HIGH);
+    digitalWrite(BIN2, LOW);
+    ledcWrite(PWMB, b);
+  }
+  if (b < 0) {
+    // CCW
+    digitalWrite(BIN1, LOW);
+    digitalWrite(BIN2, HIGH);
+    ledcWrite(PWMB, b);
+  }
+}
+
+void simple_linetrace() {
+  if (mono[2] < 100 && mono[4] > 100) {
+    drive_motor(80, 20);
+  }
+  if (mono[2] > 100 && mono[4] < 100) {
+    drive_motor(20, 80);
+  }
+  if (mono[2] < 100 && mono[4] < 100) {
+    drive_motor(80, 80);
+  }
+  if (mono[2] > 100 && mono[4] > 100) {
+    drive_motor(80, 80);
+  }
 }
 
 void setup() {
