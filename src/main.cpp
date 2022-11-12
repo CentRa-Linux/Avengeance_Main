@@ -290,7 +290,6 @@ void get_color() {
 }
 
 void get_mono(){
-  analogRead
 }
 
 void setup() {
