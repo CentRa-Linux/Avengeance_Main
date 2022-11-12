@@ -8,6 +8,13 @@
 #include <Arduino.h>
 #include <Wire.h>
 
+// TCA9548Aのi2cをスイッチする関数
+void SWITCH_BUS_TCA9548A(uint8_t bus) {
+  Wire.beginTransmission(0x70);
+  Wire.write(1 << bus);
+  Wire.endTransmission();
+}
+
 void setup() {
   Serial.begin(9600);
   Serial.println("This is ESP32, Sending message to PC on Serial Connection.");
@@ -20,10 +27,3 @@ void setup() {
 }
 
 void loop() {}
-
-// TCA9548Aのi2cをスイッチする関数
-void SWITCH_BUS_TCA9548A(uint8_t bus) {
-  Wire.beginTransmission(0x70);
-  Wire.write(1 << bus);
-  Wire.endTransmission();
-}
