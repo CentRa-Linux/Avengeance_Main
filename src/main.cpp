@@ -7,6 +7,8 @@
 // TPR-105F: IO25, 26, 27, 32, 33, 34, 35
 
 #include <Arduino.h>
+#undef max
+#undef min
 #include <Wire.h>
 // BMX055 加速度センサのI2Cアドレス
 #define Addr_Accl 0x19 // (JP1,JP2,JP3 = Openの時)
@@ -20,21 +22,52 @@
 #define CONTROL_1_LSB 0x89
 #define CONTROL_2_LSB 0x09
 #define SENSOR_REGISTER 0x03
-#define MONO_0 25
+#define MONO_0 27
 #define MONO_1 26
-#define MONO_2 27
-#define MONO_3 32
-#define MONO_4 33
-#define MONO_5 34
-#define MONO_6 35
+#define MONO_2 25
+#define MONO_3 33
+#define MONO_4 32
+#define MONO_5 35
+#define MONO_6 34
 // モータードライバのピン
-#define PWMA 17
-#define PWMB 16
+#define PWMA 17 // 左
+#define PWMB 16 // 右
 #define AIN1 4
 #define BIN1 2
 #define AIN2 0
 #define BIN2 15
 // ライントレース系の定数
+#define lmax 610
+#define lmin 117
+#define rmax 497
+#define rmin 80
+#define Kp 80
+
+#define rc_c_v 0.5
+
+#define lr_max 1540
+#define lg_max 1990
+#define lb_max 1500
+#define rr_max 1380
+#define rg_max 1800
+#define rb_max 1350
+#define lr_min 612
+#define lg_min 730
+#define lb_min 548
+#define rr_min 555
+#define rg_min 692
+#define rb_min 507
+
+#define th_lb_v 150
+#define th_rb_v 150
+
+#define mono0 50
+#define mono1 286
+#define mono2 483
+#define mono3 436
+#define mono4 437
+#define mono5 353
+#define mono6 220
 
 // センサーの値を保存するグローバル変数
 float xAccl = 0.00;
@@ -43,18 +76,24 @@ float zAccl = 0.00;
 float xGyro = 0.00;
 float yGyro = 0.00;
 float zGyro = 0.00;
-//機体の角度を保存するグローバル変数
+// 機体の角度を保存するグローバル変数
 float CompVecSize = 0.00;
 float bodyrad = 0.00;
 float bodyasin = 0.00;
 int xMag = 0;
 int yMag = 0;
 int zMag = 0;
+// センサーの色の値を保存するグローバル変数
 int rColor[4];
-int rHSV[3];
+float rpRGB[3];
+float rRGB[3];
+float rHSV[3];
 int lColor[4];
-int lHSV[3];
+float lpRGB[3];
+float lRGB[3];
+float lHSV[3];
 int mono[7];
+int sensors[9];
 
 //=====================================================================================//
 void BMX055_Init() {
@@ -326,7 +365,84 @@ void get_color() {
   Wire.endTransmission(); // I2Cスレーブ「Arduino Uno」のデータ送信終了
 }
 
-void calculate_color() {}
+void calculate_color() {
+  rpRGB[0] = rRGB[0];
+  rpRGB[1] = rRGB[1];
+  rpRGB[2] = rRGB[2];
+  lpRGB[0] = lRGB[0];
+  lpRGB[1] = lRGB[1];
+  lpRGB[2] = lRGB[2];
+  rRGB[0] = rc_c_v * rpRGB[0] +
+            (1 - rc_c_v) * (rColor[0] - rr_min) * 255.0 / (rr_max - rr_min);
+  rRGB[1] = rc_c_v * rpRGB[1] +
+            (1 - rc_c_v) * (rColor[1] - rg_min) * 255.0 / (rg_max - rg_min);
+  rRGB[2] = rc_c_v * rpRGB[2] +
+            (1 - rc_c_v) * (rColor[2] - rb_min) * 255.0 / (rb_max - rb_min);
+  lRGB[0] = rc_c_v * lpRGB[0] +
+            (1 - rc_c_v) * (lColor[0] - lr_min) * 255.0 / (lr_max - lr_min);
+  lRGB[1] = rc_c_v * lpRGB[1] +
+            (1 - rc_c_v) * (lColor[1] - lg_min) * 255.0 / (lg_max - lg_min);
+  lRGB[2] = rc_c_v * lpRGB[2] +
+            (1 - rc_c_v) * (lColor[2] - lb_min) * 255.0 / (lb_max - lb_min);
+  if (max(max(rRGB[0], rRGB[1]), rRGB[2]) == rRGB[0]) {
+    rHSV[0] = 60.0 * (rRGB[1] - rRGB[2]) /
+              (max(max(rRGB[0], rRGB[1]), rRGB[2]) -
+               min(min(rRGB[0], rRGB[1]), rRGB[2]));
+  }
+  if (max(max(rRGB[0], rRGB[1]), rRGB[2]) == rRGB[1]) {
+    rHSV[0] = 60.0 * (rRGB[2] - rRGB[0]) /
+                  (max(max(rRGB[0], rRGB[1]), rRGB[2]) -
+                   min(min(rRGB[0], rRGB[1]), rRGB[2])) +
+              120.0;
+  }
+  if (max(max(rRGB[0], rRGB[1]), rRGB[2]) == rRGB[2]) {
+    rHSV[0] = 60.0 * (rRGB[0] - rRGB[1]) /
+                  (max(max(rRGB[0], rRGB[1]), rRGB[2]) -
+                   min(min(rRGB[0], rRGB[1]), rRGB[2])) +
+              240.0;
+  }
+  rHSV[0] = abs(rHSV[0]);
+  rHSV[1] = abs((max(max(rRGB[0], rRGB[1]), rRGB[2]) -
+                 min(min(rRGB[0], rRGB[1]), rRGB[2])) /
+                max(max(rRGB[0], rRGB[1]), rRGB[2])) *
+            255.0;
+  rHSV[2] = max(max(rRGB[0], rRGB[1]), rRGB[2]);
+
+  if (max(max(lRGB[0], lRGB[1]), lRGB[2]) == lRGB[0]) {
+    lHSV[0] = 60.0 * (lRGB[1] - lRGB[2]) /
+              (max(max(lRGB[0], lRGB[1]), lRGB[2]) -
+               min(min(lRGB[0], lRGB[1]), lRGB[2]));
+  }
+  if (max(max(lRGB[0], lRGB[1]), lRGB[2]) == lRGB[1]) {
+    lHSV[0] = 60.0 * (lRGB[2] - lRGB[0]) /
+                  (max(max(lRGB[0], lRGB[1]), lRGB[2]) -
+                   min(min(lRGB[0], lRGB[1]), lRGB[2])) +
+              120.0;
+  }
+  if (max(max(lRGB[0], lRGB[1]), lRGB[2]) == lRGB[2]) {
+    lHSV[0] = 60.0 * (lRGB[0] - lRGB[1]) /
+                  (max(max(lRGB[0], lRGB[1]), lRGB[2]) -
+                   min(min(lRGB[0], lRGB[1]), lRGB[2])) +
+              240.0;
+  }
+  lHSV[0] = abs(lHSV[0]);
+  lHSV[1] = abs((max(max(lRGB[0], lRGB[1]), lRGB[2]) -
+                 min(min(lRGB[0], lRGB[1]), lRGB[2])) /
+                max(max(lRGB[0], lRGB[1]), lRGB[2])) *
+            255.0;
+  lHSV[2] = max(max(lRGB[0], lRGB[1]), lRGB[2]);
+
+  if (rHSV[2] > th_rb_v) {
+    sensors[2] = 1;
+  } else {
+    sensors[2] = 0;
+  }
+  if (lHSV[2] > th_lb_v) {
+    sensors[6] = 1;
+  } else {
+    sensors[6] = 0;
+  }
+}
 
 void get_mono() {
   mono[0] = analogRead(MONO_0);
@@ -336,6 +452,41 @@ void get_mono() {
   mono[4] = analogRead(MONO_4);
   mono[5] = analogRead(MONO_5);
   mono[6] = analogRead(MONO_6);
+  if (mono[0] < mono0) {
+    sensors[0] = 0;
+  } else {
+    sensors[0] = 1;
+  }
+  if (mono[1] < mono1) {
+    sensors[1] = 0;
+  } else {
+    sensors[1] = 1;
+  }
+  if (mono[2] < mono2) {
+    sensors[3] = 0;
+  } else {
+    sensors[3] = 1;
+  }
+  if (mono[3] < mono3) {
+    sensors[4] = 0;
+  } else {
+    sensors[4] = 1;
+  }
+  if (mono[4] < mono4) {
+    sensors[5] = 0;
+  } else {
+    sensors[5] = 1;
+  }
+  if (mono[5] < mono5) {
+    sensors[7] = 0;
+  } else {
+    sensors[7] = 1;
+  }
+  if (mono[6] < mono6) {
+    sensors[8] = 0;
+  } else {
+    sensors[8] = 1;
+  }
 }
 
 void init_motor() {
@@ -345,6 +496,10 @@ void init_motor() {
   pinMode(BIN1, OUTPUT);
   pinMode(AIN2, OUTPUT);
   pinMode(BIN2, OUTPUT);
+  ledcSetup(0, 50000, 8);
+  ledcSetup(1, 50000, 8);
+  ledcAttachPin(PWMA, 0);
+  ledcAttachPin(PWMB, 1);
 }
 
 void drive_motor(int a, int b) {
@@ -352,53 +507,63 @@ void drive_motor(int a, int b) {
     // BRAKE
     digitalWrite(AIN1, HIGH);
     digitalWrite(AIN2, HIGH);
-    ledcWrite(PWMA, a);
+    ledcWrite(0, a);
   }
   if (a > 0) {
     // CW
     digitalWrite(AIN1, HIGH);
     digitalWrite(AIN2, LOW);
-    ledcWrite(PWMA, a);
+    ledcWrite(0, a);
   }
   if (a < 0) {
     // CCW
     digitalWrite(AIN1, LOW);
     digitalWrite(AIN2, HIGH);
-    ledcWrite(PWMA, a);
+    ledcWrite(0, a);
   }
   if (b == 0) {
     // BRAKE
     digitalWrite(BIN1, HIGH);
     digitalWrite(BIN2, HIGH);
-    ledcWrite(PWMB, b);
+    ledcWrite(1, b);
   }
   if (b > 0) {
     // CW
     digitalWrite(BIN1, HIGH);
     digitalWrite(BIN2, LOW);
-    ledcWrite(PWMB, b);
+    ledcWrite(1, b);
   }
   if (b < 0) {
     // CCW
     digitalWrite(BIN1, LOW);
     digitalWrite(BIN2, HIGH);
-    ledcWrite(PWMB, b);
+    ledcWrite(1, b);
   }
 }
 
-void simple_linetrace() {
-  if (mono[2] < 100 && mono[4] > 100) {
-    drive_motor(80, 20);
+void p_linetrace() {
+  float value =
+      ((mono[2] - lmax) * 2.0 / lmax + 1) - ((mono[4] - rmax) * 2.0 / rmax + 1);
+  int l = int(80.0 - value * Kp);
+  int r = int(80.0 + value * Kp);
+  if (l > 100) {
+    l = 100;
   }
-  if (mono[2] > 100 && mono[4] < 100) {
-    drive_motor(20, 80);
+  if (r > 100) {
+    r = 100;
   }
-  if (mono[2] < 100 && mono[4] < 100) {
-    drive_motor(80, 80);
+  Serial.print(l);
+  Serial.print(",");
+  Serial.println(r);
+  drive_motor(l, r);
+}
+
+void debug_mono() {
+  for (int i = 8; i >= 0; i--) {
+    Serial.print(sensors[i]);
+    Serial.print(",");
   }
-  if (mono[2] > 100 && mono[4] > 100) {
-    drive_motor(80, 80);
-  }
+  Serial.println("");
 }
 
 void setup() {
@@ -411,6 +576,7 @@ void setup() {
   BMX055_Init();
   init_color();
   Serial.println("i2c Ok!");
+  init_motor();
 }
 
 void loop() {
@@ -420,6 +586,20 @@ void loop() {
   get_angle();
 
   get_color();
+  calculate_color();
   get_mono();
-  Serial.println(analogRead(27));
+  p_linetrace();
+  /*
+  Serial.print(lHSV[0]);
+  Serial.print(",");
+  Serial.print(lHSV[1]);
+  Serial.print(",");
+  Serial.print(lHSV[2]);
+  Serial.print(",");
+  Serial.print(rHSV[0]);
+  Serial.print(",");
+  Serial.print(rHSV[1]);
+  Serial.print(",");
+  Serial.println(rHSV[2]);
+  */
 }
