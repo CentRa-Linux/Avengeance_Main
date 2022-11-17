@@ -7,8 +7,7 @@
 // TPR-105F: IO25, 26, 27, 32, 33, 34, 35
 
 #include <Arduino.h>
-#undef max
-#undef min
+#include <MadgwickAHRS.h>
 #include <Wire.h>
 // BMX055 加速度センサのI2Cアドレス
 #define Addr_Accl 0x19 // (JP1,JP2,JP3 = Openの時)
@@ -16,6 +15,14 @@
 #define Addr_Gyro 0x69 // (JP1,JP2,JP3 = Openの時)
 // BMX055 磁気センサのI2Cアドレス
 #define Addr_Mag 0x13 // (JP1,JP2,JP3 = Openの時)
+// 加速度、地磁気センサのオフセット
+#define c_a_x 0.685
+#define c_a_y -0.87
+#define c_a_z -0.15
+#define c_m_x 202
+#define c_m_y -34
+#define c_m_z -137
+
 // S11059のアドレス、定数
 #define S11059_ADDR 0x2A
 #define CONTROL_MSB 0x00
@@ -58,8 +65,13 @@
 #define rg_min 692
 #define rb_min 507
 
-#define th_lb_v 150
-#define th_rb_v 150
+#define th_lw_v 150 // 白だと判断する明度
+#define th_rw_v 150
+
+#define th_lg_h 129
+#define th_rg_h 126
+#define th_lg_s 200
+#define th_rg_s 200
 
 #define mono0 50
 #define mono1 286
@@ -73,6 +85,9 @@
 float xAccl = 0.00;
 float yAccl = 0.00;
 float zAccl = 0.00;
+float xCalibAccl = 0.0;
+float yCalibAccl = 0.0;
+float zCalibAccl = 0.0;
 float xGyro = 0.00;
 float yGyro = 0.00;
 float zGyro = 0.00;
@@ -83,6 +98,12 @@ float bodyasin = 0.00;
 int xMag = 0;
 int yMag = 0;
 int zMag = 0;
+int xCalibMag = 0;
+int yCalibMag = 0;
+int zCalibMag = 0;
+float roll = 0.0;
+float pitch = 0.0;
+float yaw = 0.0;
 // センサーの色の値を保存するグローバル変数
 int rColor[4];
 float rpRGB[3];
@@ -94,6 +115,8 @@ float lRGB[3];
 float lHSV[3];
 int mono[7];
 int sensors[9];
+
+Madgwick madgwick;
 
 //=====================================================================================//
 void BMX055_Init() {
@@ -192,6 +215,10 @@ void BMX055_Accl() {
   xAccl = xAccl * 0.0098; // range = +/-2g
   yAccl = yAccl * 0.0098; // range = +/-2g
   zAccl = zAccl * 0.0098; // range = +/-2g
+
+  xCalibAccl = xAccl + c_a_x;
+  yCalibAccl = yAccl + c_a_y;
+  zCalibAccl = zAccl + c_a_z;
 }
 //=====================================================================================//
 void BMX055_Gyro() {
@@ -244,6 +271,10 @@ void BMX055_Mag() {
   zMag = ((data[5] << 7) | (data[4] >> 1));
   if (zMag > 16383)
     zMag -= 32768;
+
+  xCalibMag = xMag + c_m_x;
+  yCalibMag = yMag + c_m_y;
+  zCalibMag = zMag + c_m_z;
 }
 
 void get_angle() {
@@ -254,6 +285,10 @@ void get_angle() {
   } else {
     bodyrad = bodyasin - 1.57;
   }
+  madgwick.updateIMU(xGyro, yGyro, zGyro, xCalibAccl, yCalibAccl, zCalibAccl);
+  roll = madgwick.getRollRadians();
+  pitch = madgwick.getPitchRadians();
+  yaw = madgwick.getYawRadians();
 }
 
 // TCA9548Aのi2cをスイッチする関数
@@ -432,15 +467,23 @@ void calculate_color() {
             255.0;
   lHSV[2] = max(max(lRGB[0], lRGB[1]), lRGB[2]);
 
-  if (rHSV[2] > th_rb_v) {
+  if (rHSV[2] > th_rw_v) {
     sensors[2] = 1;
   } else {
-    sensors[2] = 0;
+    if (rHSV[1] > th_rg_s && rHSV[0] - 10 < th_rg_h && rHSV[0] + 10 > th_rg_h) {
+      sensors[2] = 2;
+    } else {
+      sensors[2] = 0;
+    }
   }
-  if (lHSV[2] > th_lb_v) {
+  if (lHSV[2] > th_lw_v) {
     sensors[6] = 1;
   } else {
-    sensors[6] = 0;
+    if (lHSV[1] > th_lg_s && lHSV[0] - 10 < th_lg_h && lHSV[0] + 10 > th_lg_h) {
+      sensors[6] = 2;
+    } else {
+      sensors[6] = 0;
+    }
   }
 }
 
@@ -541,7 +584,61 @@ void drive_motor(int a, int b) {
   }
 }
 
+void r_rotate(float angle) {
+  BMX055_Accl();
+  BMX055_Gyro();
+  BMX055_Mag();
+  get_angle();
+  float pres_angle = bodyrad;
+  while (bodyrad > pres_angle + 60) {
+    BMX055_Accl();
+    BMX055_Gyro();
+    BMX055_Mag();
+    get_angle();
+  }
+
+  get_color();
+  calculate_color();
+  get_mono();
+}
+
+void l_rotate(int angle) {}
+
+void setled(int i1, int i2, int i3) {
+  Wire.beginTransmission(8);
+  Wire.write(i1);
+  Wire.write(i2);
+  Wire.write(i3);
+  Wire.endTransmission();
+}
+
+void judge_junction() {
+  if (sensors[2] == 2 || sensors[6] == 2) {
+    drive_motor(0, 0);
+    delay(10000);
+  }
+}
+
+void p_slowtrace() {
+  setled(2, 3, 3);
+  float value =
+      ((mono[2] - lmax) * 2.0 / lmax + 1) - ((mono[4] - rmax) * 2.0 / rmax + 1);
+  int l = int(40.0 - value * Kp);
+  int r = int(40.0 + value * Kp);
+  if (l > 80) {
+    l = 80;
+  }
+  if (r > 40) {
+    r = 80;
+  }
+  Serial.print(l);
+  Serial.print(",");
+  Serial.println(r);
+  drive_motor(l, r);
+}
+
 void p_linetrace() {
+  setled(2, 3, 3);
   float value =
       ((mono[2] - lmax) * 2.0 / lmax + 1) - ((mono[4] - rmax) * 2.0 / rmax + 1);
   int l = int(80.0 - value * Kp);
@@ -574,10 +671,13 @@ void setup() {
   Wire.begin();
   Wire.setClock(400000);
   BMX055_Init();
+  madgwick.begin(96);
   init_color();
   Serial.println("i2c Ok!");
   init_motor();
 }
+
+float pyaw = 0;
 
 void loop() {
   BMX055_Accl();
@@ -588,7 +688,14 @@ void loop() {
   get_color();
   calculate_color();
   get_mono();
-  p_linetrace();
+  if (millis() < 10000) {
+    pyaw = yaw;
+  }
+  Serial.print(yaw);
+  Serial.print(",");
+  Serial.println(pyaw + 1.0471975512);
+  // judge_junction();
+  // p_linetrace();
   /*
   Serial.print(lHSV[0]);
   Serial.print(",");
@@ -600,6 +707,18 @@ void loop() {
   Serial.print(",");
   Serial.print(rHSV[1]);
   Serial.print(",");
-  Serial.println(rHSV[2]);
+  Serial.print(rHSV[2]);
+  Serial.println(",");
+  Serial.print(lRGB[0]);
+  Serial.print(",");
+  Serial.print(lRGB[1]);
+  Serial.print(",");
+  Serial.print(lRGB[2]);
+  Serial.print(",");
+  Serial.print(rRGB[0]);
+  Serial.print(",");
+  Serial.print(rRGB[1]);
+  Serial.print(",");
+  Serial.println(rRGB[2]);
   */
 }
