@@ -8,7 +8,12 @@
 
 #include <Arduino.h>
 #include <MadgwickAHRS.h>
+#include <NewPing.h>
 #include <Wire.h>
+
+#define TEST                                                                   \
+  false //競技時は此処がfalseになっていることを「必ず」確認！！！！！！
+
 // BMX055 加速度センサのI2Cアドレス
 #define Addr_Accl 0x19 // (JP1,JP2,JP3 = Openの時)
 // BMX055 ジャイロセンサのI2Cアドレス
@@ -19,9 +24,9 @@
 #define c_a_x 0.685
 #define c_a_y -0.87
 #define c_a_z -0.15
-#define c_m_x 202
-#define c_m_y -34
-#define c_m_z -137
+#define c_m_x 108
+#define c_m_y -10
+#define c_m_z 0
 
 // S11059のアドレス、定数
 #define S11059_ADDR 0x2A
@@ -36,6 +41,9 @@
 #define MONO_4 32
 #define MONO_5 35
 #define MONO_6 34
+//超音波のピン
+#define SS_F_T 18
+#define SS_F_E 5
 // モータードライバのピン
 #define PWMA 17 // 左
 #define PWMB 16 // 右
@@ -49,15 +57,16 @@
 #define rmax 497
 #define rmin 80
 #define Kp 80
+#define Kp2 30
 
 #define rc_c_v 0.5
 
-#define lr_max 1540
-#define lg_max 1990
-#define lb_max 1500
-#define rr_max 1380
-#define rg_max 1800
-#define rb_max 1350
+#define lr_max 1480
+#define lg_max 1910
+#define lb_max 1435
+#define rr_max 1300
+#define rg_max 1720
+#define rb_max 1275
 #define lr_min 612
 #define lg_min 730
 #define lb_min 548
@@ -65,21 +74,21 @@
 #define rg_min 692
 #define rb_min 507
 
-#define th_lw_v 150 // 白だと判断する明度
-#define th_rw_v 150
+#define th_lw_v 20 // 白だと判断する明度
+#define th_rw_v 20
 
 #define th_lg_h 129
 #define th_rg_h 126
 #define th_lg_s 200
 #define th_rg_s 200
 
-#define mono0 50
-#define mono1 286
-#define mono2 483
-#define mono3 436
-#define mono4 437
-#define mono5 353
-#define mono6 220
+#define mono0 1
+#define mono1 30
+#define mono2 250
+#define mono3 250
+#define mono4 250
+#define mono5 90
+#define mono6 50
 
 // センサーの値を保存するグローバル変数
 float xAccl = 0.00;
@@ -115,6 +124,11 @@ float lRGB[3];
 float lHSV[3];
 int mono[7];
 int sensors[9];
+// 超音波センサーの値を格納する場所
+float dist = 0.00;
+NewPing SS_F(SS_F_T, SS_F_E, 200);
+
+int point = 0;
 
 Madgwick madgwick;
 
@@ -277,6 +291,42 @@ void BMX055_Mag() {
   zCalibMag = zMag + c_m_z;
 }
 
+void check_bmx() {
+  int xmax = -360;
+  int xmin = 360;
+  int ymax = -360;
+  int ymin = 360;
+  BMX055_Mag();
+  if (xMag != 0 && yMag != 0) {
+    xmax = xMag;
+    xmin = xMag;
+    ymax = yMag;
+    ymin = yMag;
+  }
+  while (true) {
+    BMX055_Mag();
+    if (xMag != 0 && yMag != 0) {
+      if (xMag > xmax)
+        xmax = xMag;
+      if (xMag < xmin)
+        xmin = xMag;
+      if (yMag > ymax)
+        ymax = yMag;
+      if (yMag < ymin)
+        ymin = yMag;
+    }
+    Serial.print(xmin);
+    Serial.print(",");
+    Serial.print(xmax);
+    Serial.print(",");
+    Serial.print(ymin);
+    Serial.print(",");
+    Serial.println(ymax);
+  }
+}
+
+float tan2angle(float x, float y) { return atan2(y, x); }
+
 void get_angle() {
   CompVecSize = std::pow((std::pow(xAccl, 2.0) + std::pow(zAccl, 2.0)), 0.5);
   bodyasin = asin(zAccl / CompVecSize);
@@ -288,7 +338,7 @@ void get_angle() {
   madgwick.updateIMU(xGyro, yGyro, zGyro, xCalibAccl, yCalibAccl, zCalibAccl);
   roll = madgwick.getRollRadians();
   pitch = madgwick.getPitchRadians();
-  yaw = madgwick.getYawRadians();
+  yaw = tan2angle(yCalibMag, xCalibMag);
 }
 
 // TCA9548Aのi2cをスイッチする関数
@@ -467,23 +517,33 @@ void calculate_color() {
             255.0;
   lHSV[2] = max(max(lRGB[0], lRGB[1]), lRGB[2]);
 
-  if (rHSV[2] > th_rw_v) {
-    sensors[2] = 1;
-  } else {
-    if (rHSV[1] > th_rg_s && rHSV[0] - 10 < th_rg_h && rHSV[0] + 10 > th_rg_h) {
-      sensors[2] = 2;
-    } else {
-      sensors[2] = 0;
-    }
-  }
   if (lHSV[2] > th_lw_v) {
     sensors[6] = 1;
-  } else {
-    if (lHSV[1] > th_lg_s && lHSV[0] - 10 < th_lg_h && lHSV[0] + 10 > th_lg_h) {
-      sensors[6] = 2;
-    } else {
-      sensors[6] = 0;
+    if (lHSV[2] > 400) {
+      sensors[6] = 4;
     }
+  } else {
+    sensors[6] = 0;
+  }
+  if (rHSV[2] > th_rw_v) {
+    if (rHSV[2] > 400) {
+      sensors[2] = 4;
+    }
+    sensors[2] = 1;
+  } else {
+    sensors[2] = 0;
+  }
+  if (lRGB[0] - lRGB[1] > 60 && (lRGB[0] + lRGB[1] + lRGB[2]) / 3 < 150) {
+    sensors[6] = 3;
+  }
+  if (rRGB[0] - rRGB[1] > 60 && (rRGB[0] + rRGB[1] + rRGB[2]) / 3 < 150) {
+    sensors[2] = 3;
+  }
+  if (lRGB[0] - lRGB[1] < -30 && (lRGB[0] + lRGB[1] + lRGB[2]) / 3 < 90) {
+    sensors[6] = 2;
+  }
+  if (rRGB[0] - rRGB[1] < -30 && (rRGB[0] + rRGB[1] + rRGB[2]) / 3 < 90) {
+    sensors[2] = 2;
   }
 }
 
@@ -546,6 +606,12 @@ void init_motor() {
 }
 
 void drive_motor(int a, int b) {
+  if (TEST == true) {
+    Serial.print(a);
+    Serial.print(",");
+    Serial.println(b);
+    return;
+  }
   if (a == 0) {
     // BRAKE
     digitalWrite(AIN1, HIGH);
@@ -562,7 +628,7 @@ void drive_motor(int a, int b) {
     // CCW
     digitalWrite(AIN1, LOW);
     digitalWrite(AIN2, HIGH);
-    ledcWrite(0, a);
+    ledcWrite(0, abs(a));
   }
   if (b == 0) {
     // BRAKE
@@ -580,29 +646,41 @@ void drive_motor(int a, int b) {
     // CCW
     digitalWrite(BIN1, LOW);
     digitalWrite(BIN2, HIGH);
-    ledcWrite(1, b);
+    ledcWrite(1, abs(b));
   }
 }
 
-void r_rotate(float angle) {
-  BMX055_Accl();
-  BMX055_Gyro();
-  BMX055_Mag();
-  get_angle();
-  float pres_angle = bodyrad;
-  while (bodyrad > pres_angle + 60) {
-    BMX055_Accl();
-    BMX055_Gyro();
-    BMX055_Mag();
-    get_angle();
+bool decide(float angle, float target, float origin,
+            float acceptable_error) { /*
+Serial.print(abs(target - angle));
+Serial.print(",");
+Serial.println(abs(origin - angle));*/
+  if (angle > 0) {
+    if (abs(target - angle) < acceptable_error ||
+        abs(origin - angle) < acceptable_error) {
+      Serial.println("end rotating using acc. sensor");
+      return false;
+    } else {
+      return true;
+    }
+  } else if (angle < 0) {
+    if (abs(target - angle) < acceptable_error ||
+        abs(origin - angle) < acceptable_error) {
+      Serial.println("end rotating using acc. sensor");
+      return false;
+    } else {
+      return true;
+    }
   }
-
-  get_color();
-  calculate_color();
-  get_mono();
 }
 
-void l_rotate(int angle) {}
+void debug_mono() {
+  for (int i = 8; i >= 0; i--) {
+    Serial.print(sensors[i]);
+    Serial.print(",");
+  }
+  Serial.println("");
+}
 
 void setled(int i1, int i2, int i3) {
   Wire.beginTransmission(8);
@@ -612,55 +690,349 @@ void setled(int i1, int i2, int i3) {
   Wire.endTransmission();
 }
 
-void judge_junction() {
-  if (sensors[2] == 2 || sensors[6] == 2) {
-    drive_motor(0, 0);
-    delay(10000);
+void rotate_NC(float angle, float error) {
+  BMX055_Accl();
+  BMX055_Gyro();
+  BMX055_Mag();
+  get_angle();
+  float pres_angle = bodyrad;
+  float target = yaw + angle;
+  float origin = target;
+  if (angle > 0) {
+    if (target > PI)
+      target -= 2 * PI;
+  } else if (angle < 0) {
+    if (target < -PI)
+      target += 2 * PI;
   }
+  Serial.println("start rotating");
+  if (angle > 0) {
+    drive_motor(-100, 100);
+    delay(100);
+  } else if (angle < 0) {
+    drive_motor(100, -100);
+    delay(100);
+  }
+  while (decide(yaw, target, origin, error)) {
+    BMX055_Accl();
+    BMX055_Gyro();
+    BMX055_Mag();
+    get_angle();
+    if (angle > 0) {
+      drive_motor(-60, 60);
+    } else if (angle < 0) {
+      drive_motor(60, -60);
+    }
+    get_color();
+    calculate_color();
+    get_mono();
+    setled(3, 3, 0);
+  }
+  Serial.println("end");
+  drive_motor(0, 0);
+  delay(100);
+}
+
+void rotate(float angle, float error) {
+  BMX055_Accl();
+  BMX055_Gyro();
+  BMX055_Mag();
+  get_angle();
+  float pres_angle = bodyrad;
+  float target = yaw + angle;
+  float origin = target;
+  if (angle > 0) {
+    if (target > PI)
+      target -= 2 * PI;
+  } else if (angle < 0) {
+    if (target < -PI)
+      target += 2 * PI;
+  }
+  Serial.println("start rotating");
+  if (angle > 0) {
+    drive_motor(-100, 100);
+    delay(100);
+  } else if (angle < 0) {
+    drive_motor(100, -100);
+    delay(100);
+  }
+  while (decide(yaw, target, origin, error)) {
+    BMX055_Accl();
+    BMX055_Gyro();
+    BMX055_Mag();
+    get_angle();
+    if (angle > 0) {
+      drive_motor(-80, 80);
+    } else if (angle < 0) {
+      drive_motor(80, -80);
+    }
+    get_color();
+    calculate_color();
+    get_mono();
+    setled(3, 3, 0);
+  }
+  while (sensors[4] == 1) {
+    get_color();
+    calculate_color();
+    get_mono();
+    if (angle > 0) {
+      drive_motor(-70, 70);
+    } else if (angle < 0) {
+      drive_motor(70, -70);
+    }
+    setled(3, 3, 3);
+  }
+  Serial.println("end");
+  drive_motor(0, 0);
+  delay(100);
 }
 
 void p_slowtrace() {
   setled(2, 3, 3);
   float value =
       ((mono[2] - lmax) * 2.0 / lmax + 1) - ((mono[4] - rmax) * 2.0 / rmax + 1);
-  int l = int(40.0 - value * Kp);
-  int r = int(40.0 + value * Kp);
-  if (l > 80) {
-    l = 80;
+  if ((sensors[0] == 0 || sensors[1] == 0) &&
+      (sensors[7] == 1 || sensors[8] == 1)) {
+    value = -1.5;
+    point -= 50;
   }
-  if (r > 40) {
-    r = 80;
+  if ((sensors[0] == 1 || sensors[1] == 1) &&
+      (sensors[7] == 0 || sensors[8] == 0)) {
+    value = 1.5;
+    point += 50;
   }
-  Serial.print(l);
-  Serial.print(",");
-  Serial.println(r);
+  if ((sensors[0] == 0 || sensors[1] == 0) &&
+      (sensors[7] == 0 || sensors[8] == 0)) {
+    value = 0;
+    if (point > 1000) {
+      value = -1.0;
+      point = 2000;
+      setled(3, 0, 3);
+    }
+    if (point < -1000) {
+      value = 1.0;
+      point = -2000;
+      setled(3, 3, 0);
+    }
+  }
+  int l = int(65.0 - value * Kp2);
+  int r = int(65.0 + value * Kp2);
+  if (l > 65) {
+    l = 65;
+  }
+  if (r > 65) {
+    r = 65;
+  }
   drive_motor(l, r);
 }
 
 void p_linetrace() {
+  Serial.println("Tracing line");
   setled(2, 3, 3);
   float value =
       ((mono[2] - lmax) * 2.0 / lmax + 1) - ((mono[4] - rmax) * 2.0 / rmax + 1);
-  int l = int(80.0 - value * Kp);
-  int r = int(80.0 + value * Kp);
-  if (l > 100) {
-    l = 100;
+  if ((sensors[0] == 0 || sensors[1] == 0) &&
+      (sensors[7] == 1 || sensors[8] == 1)) {
+    value = -1.5;
+    point -= 50;
   }
-  if (r > 100) {
-    r = 100;
+  if ((sensors[0] == 1 || sensors[1] == 1) &&
+      (sensors[7] == 0 || sensors[8] == 0)) {
+    value = 1.5;
+    point += 50;
   }
-  Serial.print(l);
-  Serial.print(",");
-  Serial.println(r);
+  if ((sensors[0] == 0 || sensors[1] == 0) &&
+      (sensors[7] == 0 || sensors[8] == 0)) {
+    value = 0;
+  }
+  int l = int(65.0 - value * Kp);
+  int r = int(65.0 + value * Kp);
+  if (l > 65) {
+    l = 65;
+  }
+  if (r > 65) {
+    r = 65;
+  }
   drive_motor(l, r);
 }
 
-void debug_mono() {
-  for (int i = 8; i >= 0; i--) {
-    Serial.print(sensors[i]);
-    Serial.print(",");
+void escape() {
+  if (sensors[2] == 4 && sensors[6] == 4) {
+    int now = millis() + 1500;
+    while (millis() < now) {
+      get_color();
+      calculate_color();
+      get_mono();
+      drive_motor(70, 70);
+    }
+    rotate_NC(PI / 2, 0.2);
+    dist = SS_F.ping_cm();
+    while (dist > 15) {
+      dist = SS_F.ping_cm();
+      drive_motor(70, 70);
+    }
+    rotate_NC(PI / 2, 0.2);
+    while (sensors[3] == 1 && sensors[4] == 1 && sensors[5] == 1) {
+      get_color();
+      calculate_color();
+      get_mono();
+      p_linetrace();
+    }
   }
-  Serial.println("");
+}
+
+void judge_obstacle() {
+  if (dist < 5 && dist != 0) {
+    Serial.println("found obstacle");
+    int now = millis() + 500;
+    while (millis() < now) {
+      get_color();
+      calculate_color();
+      get_mono();
+      drive_motor(-70, -70);
+    }
+    rotate_NC(PI / 2, 0.2);
+    while (sensors[3] == 1 && sensors[4] == 1 && sensors[5] == 1) {
+      get_mono();
+      drive_motor(120, 40);
+    }
+    rotate_NC(PI / 2, 0.2);
+    drive_motor(0, 0);
+  }
+}
+
+void judge_gap() {
+  if (sensors[0] == 1 && sensors[1] && sensors[3] == 1 && sensors[4] == 1 &&
+      sensors[5] == 1 && sensors[7] == 1 && sensors[8] == 1) {
+    Serial.println("Found gap");
+    get_color();
+    calculate_color();
+    get_mono();
+    while (sensors[0] == 1 && sensors[1] && sensors[3] == 1 &&
+           sensors[4] == 1 && sensors[5] == 1 && sensors[7] == 1 &&
+           sensors[8] == 1) {
+      get_color();
+      calculate_color();
+      get_mono();
+      int now = millis() + 500;
+      while (sensors[0] == 1 && sensors[1] && sensors[3] == 1 &&
+             sensors[4] == 1 && sensors[5] == 1 && sensors[7] == 1 &&
+             sensors[8] == 1 && millis() < now) {
+        get_color();
+        calculate_color();
+        get_mono();
+        drive_motor(70, 70);
+      }
+      now = millis();
+      while (sensors[0] == 1 && sensors[1] && sensors[3] == 1 &&
+             sensors[4] == 1 && sensors[5] == 1 && sensors[7] == 1 &&
+             sensors[8] == 1 && millis() < now + 1500) {
+        get_color();
+        calculate_color();
+        get_mono();
+        drive_motor(70, 0);
+      }
+      now = millis();
+      while (sensors[0] == 1 && sensors[1] && sensors[3] == 1 &&
+             sensors[4] == 1 && sensors[5] == 1 && sensors[7] == 1 &&
+             sensors[8] == 1 && millis() < now + 1500) {
+        get_color();
+        calculate_color();
+        get_mono();
+        drive_motor(-70, 0);
+      }
+      now = millis();
+      while (sensors[0] == 1 && sensors[1] && sensors[3] == 1 &&
+             sensors[4] == 1 && sensors[5] == 1 && sensors[7] == 1 &&
+             sensors[8] == 1 && millis() < now + 1500) {
+        get_color();
+        calculate_color();
+        get_mono();
+        drive_motor(0, 70);
+      }
+      now = millis();
+      while (sensors[0] == 1 && sensors[1] && sensors[3] == 1 &&
+             sensors[4] == 1 && sensors[5] == 1 && sensors[7] == 1 &&
+             sensors[8] == 1 && millis() < now + 1500) {
+        get_color();
+        calculate_color();
+        get_mono();
+        drive_motor(0, -70);
+      }
+      now = millis();
+      while (sensors[0] == 1 && sensors[1] && sensors[3] == 1 &&
+             sensors[4] == 1 && sensors[5] == 1 && sensors[7] == 1 &&
+             sensors[8] == 1 && millis() < now + 1500) {
+        get_color();
+        calculate_color();
+        get_mono();
+        drive_motor(70, 70);
+      }
+    }
+  }
+}
+
+void judge_green() {
+  if (sensors[2] == 2 || sensors[6] == 2) {
+    drive_motor(0, 0);
+    delay(100);
+    drive_motor(-100, -100);
+    delay(50);
+    int now = millis();
+    bool l = false;
+    bool r = false;
+    bool checkline = false;
+    if (sensors[2] == 2) {
+      r = true;
+    }
+    if (sensors[6] == 2) {
+      l = true;
+    }
+    Serial.println("start");
+    while ((millis() < now + 2000) && (((sensors[0] == 1 || sensors[1] == 1) &&
+                                        (sensors[7] == 1 || sensors[8] == 1)) ||
+                                       sensors[4] == 1)) {
+      get_color();
+      calculate_color();
+      get_mono();
+      drive_motor(40, 40);
+      if (sensors[2] == 2) {
+        r = true;
+      }
+      if (sensors[6] == 2) {
+        l = true;
+      }
+      Serial.println(sensors[4]);
+      if (((sensors[0] == 0 && sensors[1] == 0) ||
+           (sensors[7] == 0 && sensors[8] == 0)) &&
+          sensors[4] == 0) {
+        checkline = true;
+      }
+    }
+    if (checkline == false) {
+      return;
+    }
+    now = millis();
+    if (l == true || r == true) {
+      while (millis() < now + 650) {
+        drive_motor(60, 60);
+      }
+    }
+    if (l == true && r == false) {
+      rotate(PI / 2, 0.90);
+    }
+    if (l == false && r == true) {
+      rotate(-PI / 2, 0.90);
+    }
+    if (l == true && r == true) {
+      rotate(PI, 0.90);
+    }
+    Serial.print(checkline);
+    Serial.print(",");
+    Serial.print(l);
+    Serial.print(",");
+    Serial.println(r);
+  }
 }
 
 void setup() {
@@ -677,7 +1049,7 @@ void setup() {
   init_motor();
 }
 
-float pyaw = 0;
+int now = 0;
 
 void loop() {
   BMX055_Accl();
@@ -688,16 +1060,36 @@ void loop() {
   get_color();
   calculate_color();
   get_mono();
-  if (millis() < 10000) {
-    pyaw = yaw;
+  // debug_mono();
+  if (millis() > now + 400) {
+    int now = millis();
+    dist = SS_F.ping_cm();
   }
-  Serial.print(yaw);
-  Serial.print(",");
-  Serial.println(pyaw + 1.0471975512);
-  // judge_junction();
-  // p_linetrace();
-  /*
-  Serial.print(lHSV[0]);
+  //  check_bmx();
+  judge_obstacle();
+  judge_gap();
+  judge_green();
+  if (bodyrad > 0.1) {
+    p_slowtrace();
+  } else {
+    p_linetrace();
+  }
+  if (point > 0) {
+    point -= 5;
+  }
+  if (point < 0) {
+    point += 5;
+  }
+  if (sensors[2] == 3 || sensors[6] == 3) {
+    Serial.println("red");
+    drive_motor(0, 0);
+    while (true) {
+      delay(1);
+    }
+  }
+  // Serial.println(dist);
+  // debug_mono();
+  /*Serial.print(lHSV[0]);
   Serial.print(",");
   Serial.print(lHSV[1]);
   Serial.print(",");
@@ -715,10 +1107,13 @@ void loop() {
   Serial.print(",");
   Serial.print(lRGB[2]);
   Serial.print(",");
+  Serial.print(lColor[3]);
+  Serial.print(",");
   Serial.print(rRGB[0]);
   Serial.print(",");
   Serial.print(rRGB[1]);
   Serial.print(",");
-  Serial.println(rRGB[2]);
-  */
+  Serial.print(rRGB[2]);
+  Serial.print(",");
+  Serial.println(rColor[3]);*/
 }
