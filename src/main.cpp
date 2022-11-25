@@ -290,7 +290,7 @@ void get_color() {
 }
 
 void get_mono(){
-}
+} 
 
 void setup() {
   Serial.begin(9600);
