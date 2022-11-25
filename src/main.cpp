@@ -7,8 +7,6 @@
 // TPR-105F: IO25, 26, 27, 32, 33, 34, 35
 
 #include <Arduino.h>
-#include <MadgwickAHRS.h>
-#include <NewPing.h>
 #include <Wire.h>
 
 #define TEST                                                                   \
@@ -126,11 +124,8 @@ int mono[7];
 int sensors[9];
 // 超音波センサーの値を格納する場所
 float dist = 0.00;
-NewPing SS_F(SS_F_T, SS_F_E, 200);
 
 int point = 0;
-
-Madgwick madgwick;
 
 //=====================================================================================//
 void BMX055_Init() {
@@ -335,9 +330,6 @@ void get_angle() {
   } else {
     bodyrad = bodyasin - 1.57;
   }
-  madgwick.updateIMU(xGyro, yGyro, zGyro, xCalibAccl, yCalibAccl, zCalibAccl);
-  roll = madgwick.getRollRadians();
-  pitch = madgwick.getPitchRadians();
   yaw = tan2angle(yCalibMag, xCalibMag);
 }
 
@@ -827,7 +819,6 @@ void p_slowtrace() {
 }
 
 void p_linetrace() {
-  Serial.println("Tracing line");
   setled(2, 3, 3);
   float value =
       ((mono[2] - lmax) * 2.0 / lmax + 1) - ((mono[4] - rmax) * 2.0 / rmax + 1);
@@ -866,9 +857,7 @@ void escape() {
       drive_motor(70, 70);
     }
     rotate_NC(PI / 2, 0.2);
-    dist = SS_F.ping_cm();
     while (dist > 15) {
-      dist = SS_F.ping_cm();
       drive_motor(70, 70);
     }
     rotate_NC(PI / 2, 0.2);
@@ -1043,7 +1032,6 @@ void setup() {
   Wire.begin();
   Wire.setClock(400000);
   BMX055_Init();
-  madgwick.begin(96);
   init_color();
   Serial.println("i2c Ok!");
   init_motor();
@@ -1061,10 +1049,6 @@ void loop() {
   calculate_color();
   get_mono();
   // debug_mono();
-  if (millis() > now + 400) {
-    int now = millis();
-    dist = SS_F.ping_cm();
-  }
   //  check_bmx();
   judge_obstacle();
   judge_gap();
@@ -1116,4 +1100,5 @@ void loop() {
   Serial.print(rRGB[2]);
   Serial.print(",");
   Serial.println(rColor[3]);*/
+  Serial.println(sensors[8]);
 }
