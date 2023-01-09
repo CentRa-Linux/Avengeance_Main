@@ -6,8 +6,11 @@
 // S11059-02DT: 0x2A
 // TPR-105F: IO25, 26, 27, 32, 33, 34, 35
 
+#include <Adafruit_BNO055.h>
+#include <Adafruit_Sensor.h>
 #include <Arduino.h>
 #include <Wire.h>
+#include <utility/imumaths.h>
 
 #define TEST                                                                   \
   false //競技時は此処がfalseになっていることを「必ず」確認！！！！！！
@@ -88,29 +91,15 @@
 #define mono5 90
 #define mono6 50
 
-// センサーの値を保存するグローバル変数
-float xAccl = 0.00;
-float yAccl = 0.00;
-float zAccl = 0.00;
-float xCalibAccl = 0.0;
-float yCalibAccl = 0.0;
-float zCalibAccl = 0.0;
-float xGyro = 0.00;
-float yGyro = 0.00;
-float zGyro = 0.00;
-// 機体の角度を保存するグローバル変数
-float CompVecSize = 0.00;
-float bodyrad = 0.00;
-float bodyasin = 0.00;
-int xMag = 0;
-int yMag = 0;
-int zMag = 0;
-int xCalibMag = 0;
-int yCalibMag = 0;
-int zCalibMag = 0;
-float roll = 0.0;
-float pitch = 0.0;
-float yaw = 0.0;
+// Tof センサのアドレス
+#define ADDRESS 0x52
+
+float roll = 0.0; //機体のroll角
+
+float pitch = 0.0; //機体のpitch角
+
+float yaw = 0.0; //機体のyaw角
+
 // センサーの色の値を保存するグローバル変数
 int rColor[4];
 float rpRGB[3];
@@ -122,222 +111,35 @@ float lRGB[3];
 float lHSV[3];
 int mono[7];
 int sensors[9];
-// 超音波センサーの値を格納する場所
-float dist = 0.00;
 
+//ライントレース用の変数
 int point = 0;
 
-//=====================================================================================//
-void BMX055_Init() {
-  //------------------------------------------------------------//
-  Wire.beginTransmission(Addr_Accl);
-  Wire.write(0x0F); // Select PMU_Range register
-  Wire.write(0x03); // Range = +/- 2g
-  Wire.endTransmission();
-  delay(100);
-  //------------------------------------------------------------//
-  Wire.beginTransmission(Addr_Accl);
-  Wire.write(0x10); // Select PMU_BW register
-  Wire.write(0x08); // Bandwidth = 7.81 Hz
-  Wire.endTransmission();
-  delay(100);
-  //------------------------------------------------------------//
-  Wire.beginTransmission(Addr_Accl);
-  Wire.write(0x11); // Select PMU_LPW register
-  Wire.write(0x00); // Normal mode, Sleep duration = 0.5ms
-  Wire.endTransmission();
-  delay(100);
-  //------------------------------------------------------------//
-  Wire.beginTransmission(Addr_Gyro);
-  Wire.write(0x0F); // Select Range register
-  Wire.write(0x04); // Full scale = +/- 125 degree/s
-  Wire.endTransmission();
-  delay(100);
-  //------------------------------------------------------------//
-  Wire.beginTransmission(Addr_Gyro);
-  Wire.write(0x10); // Select Bandwidth register
-  Wire.write(0x07); // ODR = 100 Hz
-  Wire.endTransmission();
-  delay(100);
-  //------------------------------------------------------------//
-  Wire.beginTransmission(Addr_Gyro);
-  Wire.write(0x11); // Select LPM1 register
-  Wire.write(0x00); // Normal mode, Sleep duration = 2ms
-  Wire.endTransmission();
-  delay(100);
-  //------------------------------------------------------------//
-  Wire.beginTransmission(Addr_Mag);
-  Wire.write(0x4B); // Select Mag register
-  Wire.write(0x83); // Soft reset
-  Wire.endTransmission();
-  delay(100);
-  //------------------------------------------------------------//
-  Wire.beginTransmission(Addr_Mag);
-  Wire.write(0x4B); // Select Mag register
-  Wire.write(0x01); // Soft reset
-  Wire.endTransmission();
-  delay(100);
-  //------------------------------------------------------------//
-  Wire.beginTransmission(Addr_Mag);
-  Wire.write(0x4C); // Select Mag register
-  Wire.write(0x00); // Normal Mode, ODR = 10 Hz
-  Wire.endTransmission();
-  //------------------------------------------------------------//
-  Wire.beginTransmission(Addr_Mag);
-  Wire.write(0x4E); // Select Mag register
-  Wire.write(0x84); // X, Y, Z-Axis enabled
-  Wire.endTransmission();
-  //------------------------------------------------------------//
-  Wire.beginTransmission(Addr_Mag);
-  Wire.write(0x51); // Select Mag register
-  Wire.write(0x04); // No. of Repetitions for X-Y Axis = 9
-  Wire.endTransmission();
-  //------------------------------------------------------------//
-  Wire.beginTransmission(Addr_Mag);
-  Wire.write(0x52); // Select Mag register
-  Wire.write(0x16); // No. of Repetitions for Z-Axis = 15
-  Wire.endTransmission();
-}
-//=====================================================================================//
-void BMX055_Accl() {
-  unsigned int data[6];
-  for (int i = 0; i < 6; i++) {
-    Wire.beginTransmission(Addr_Accl);
-    Wire.write((2 + i)); // Select data register
-    Wire.endTransmission();
-    Wire.requestFrom(Addr_Accl, 1); // Request 1 byte of data
-    // Read 6 bytes of data
-    // xAccl lsb, xAccl msb, yAccl lsb, yAccl msb, zAccl lsb, zAccl msb
-    if (Wire.available() == 1)
-      data[i] = Wire.read();
-  }
-  // Convert the data to 12-bits
-  xAccl = ((data[1] * 256) + (data[0] & 0xF0)) / 16;
-  if (xAccl > 2047)
-    xAccl -= 4096;
-  yAccl = ((data[3] * 256) + (data[2] & 0xF0)) / 16;
-  if (yAccl > 2047)
-    yAccl -= 4096;
-  zAccl = ((data[5] * 256) + (data[4] & 0xF0)) / 16;
-  if (zAccl > 2047)
-    zAccl -= 4096;
-  xAccl = xAccl * 0.0098; // range = +/-2g
-  yAccl = yAccl * 0.0098; // range = +/-2g
-  zAccl = zAccl * 0.0098; // range = +/-2g
+// 前後左右のTofセンサの値を格納する場所　0=前 1=後 2=左 3=右
+uint16_t distance[4];
 
-  xCalibAccl = xAccl + c_a_x;
-  yCalibAccl = yAccl + c_a_y;
-  zCalibAccl = zAccl + c_a_z;
-}
-//=====================================================================================//
-void BMX055_Gyro() {
-  unsigned int data[6];
-  for (int i = 0; i < 6; i++) {
-    Wire.beginTransmission(Addr_Gyro);
-    Wire.write((2 + i)); // Select data register
-    Wire.endTransmission();
-    Wire.requestFrom(Addr_Gyro, 1); // Request 1 byte of data
-    // Read 6 bytes of data
-    // xGyro lsb, xGyro msb, yGyro lsb, yGyro msb, zGyro lsb, zGyro msb
-    if (Wire.available() == 1)
-      data[i] = Wire.read();
-  }
-  // Convert the data
-  xGyro = (data[1] * 256) + data[0];
-  if (xGyro > 32767)
-    xGyro -= 65536;
-  yGyro = (data[3] * 256) + data[2];
-  if (yGyro > 32767)
-    yGyro -= 65536;
-  zGyro = (data[5] * 256) + data[4];
-  if (zGyro > 32767)
-    zGyro -= 65536;
+// I2Cデバイスのアドレスをチェック and correct line below (by default address is
+// 0x29 or 0x28)
+//                                   id, address
+Adafruit_BNO055 bno = Adafruit_BNO055(-1, 0x28, &Wire);
 
-  xGyro = xGyro * 0.0038; //  Full scale = +/- 125 degree/s
-  yGyro = yGyro * 0.0038; //  Full scale = +/- 125 degree/s
-  zGyro = zGyro * 0.0038; //  Full scale = +/- 125 degree/s
-}
-//=====================================================================================//
-void BMX055_Mag() {
-  unsigned int data[8];
-  for (int i = 0; i < 8; i++) {
-    Wire.beginTransmission(Addr_Mag);
-    Wire.write((0x42 + i)); // Select data register
-    Wire.endTransmission();
-    Wire.requestFrom(Addr_Mag, 1); // Request 1 byte of data
-    // Read 6 bytes of data
-    // xMag lsb, xMag msb, yMag lsb, yMag msb, zMag lsb, zMag msb
-    if (Wire.available() == 1)
-      data[i] = Wire.read();
-  }
-  // Convert the data
-  xMag = ((data[1] << 5) | (data[0] >> 3));
-  if (xMag > 4095)
-    xMag -= 8192;
-  yMag = ((data[3] << 5) | (data[2] >> 3));
-  if (yMag > 4095)
-    yMag -= 8192;
-  zMag = ((data[5] << 7) | (data[4] >> 1));
-  if (zMag > 16383)
-    zMag -= 32768;
-
-  xCalibMag = xMag + c_m_x;
-  yCalibMag = yMag + c_m_y;
-  zCalibMag = zMag + c_m_z;
-}
-
-void check_bmx() {
-  int xmax = -360;
-  int xmin = 360;
-  int ymax = -360;
-  int ymin = 360;
-  BMX055_Mag();
-  if (xMag != 0 && yMag != 0) {
-    xmax = xMag;
-    xmin = xMag;
-    ymax = yMag;
-    ymin = yMag;
-  }
-  while (true) {
-    BMX055_Mag();
-    if (xMag != 0 && yMag != 0) {
-      if (xMag > xmax)
-        xmax = xMag;
-      if (xMag < xmin)
-        xmin = xMag;
-      if (yMag > ymax)
-        ymax = yMag;
-      if (yMag < ymin)
-        ymin = yMag;
-    }
-    Serial.print(xmin);
-    Serial.print(",");
-    Serial.print(xmax);
-    Serial.print(",");
-    Serial.print(ymin);
-    Serial.print(",");
-    Serial.println(ymax);
-  }
-}
-
-float tan2angle(float x, float y) { return atan2(y, x); }
-
-void get_angle() {
-  CompVecSize = std::pow((std::pow(xAccl, 2.0) + std::pow(zAccl, 2.0)), 0.5);
-  bodyasin = asin(zAccl / CompVecSize);
-  if (xAccl < 0) {
-    bodyrad = 1.57 - bodyasin;
-  } else {
-    bodyrad = bodyasin - 1.57;
-  }
-  yaw = tan2angle(yCalibMag, xCalibMag);
-}
+// float tan2angle(float x, float y) { return atan2(y, x); }
 
 // TCA9548Aのi2cをスイッチする関数
 void SWITCH_BUS_TCA9548A(uint8_t bus) {
   Wire.beginTransmission(0x70);
   Wire.write(1 << bus);
   Wire.endTransmission();
+}
+
+// BNO055でオイラー角を算出する関数
+void get_angle() {
+  SWITCH_BUS_TCA9548A(0);
+  imu::Vector<3> euler = bno.getVector(Adafruit_BNO055::VECTOR_EULER);
+  // roll pitch yawに機体の角度を保存
+  roll = euler.x() - 180;
+  pitch = euler.y();
+  yaw = euler.z(); // yawの値の範囲は　-180 < yaw < 180
 }
 
 void init_color() {
@@ -531,10 +333,10 @@ void calculate_color() {
   if (rRGB[0] - rRGB[1] > 60 && (rRGB[0] + rRGB[1] + rRGB[2]) / 3 < 150) {
     sensors[2] = 3;
   }
-  if (lRGB[0] - lRGB[1] < -30 && (lRGB[0] + lRGB[1] + lRGB[2]) / 3 < 90) {
+  if (lRGB[0] - lRGB[1] < -25 && (lRGB[0] + lRGB[1] + lRGB[2]) / 3 < 90) {
     sensors[6] = 2;
   }
-  if (rRGB[0] - rRGB[1] < -30 && (rRGB[0] + rRGB[1] + rRGB[2]) / 3 < 90) {
+  if (rRGB[0] - rRGB[1] < -25 && (rRGB[0] + rRGB[1] + rRGB[2]) / 3 < 90) {
     sensors[2] = 2;
   }
 }
@@ -642,6 +444,7 @@ void drive_motor(int a, int b) {
   }
 }
 
+//目標旋回角度に到達したか確認する関数
 bool decide(float angle, float target, float origin,
             float acceptable_error) { /*
 Serial.print(abs(target - angle));
@@ -682,97 +485,40 @@ void setled(int i1, int i2, int i3) {
   Wire.endTransmission();
 }
 
-void rotate_NC(float angle, float error) {
-  BMX055_Accl();
-  BMX055_Gyro();
-  BMX055_Mag();
+//旋回を行う関数 float angle の値は-180以上180以下
+void rotate_NC(int angle, int error) {
   get_angle();
-  float pres_angle = bodyrad;
-  float target = yaw + angle;
+  //旋回前のオイラー角
+  float pres_angle = roll;
+  //旋回目的のオイラー角（定義域範囲外の値もとりうる）
+  float target = roll + angle;
   float origin = target;
   if (angle > 0) {
-    if (target > PI)
-      target -= 2 * PI;
+    if (target > 180)
+      target -= 360;
   } else if (angle < 0) {
-    if (target < -PI)
-      target += 2 * PI;
+    if (target < -180)
+      target += 360;
   }
   Serial.println("start rotating");
   if (angle > 0) {
-    drive_motor(-100, 100);
-    delay(100);
-  } else if (angle < 0) {
     drive_motor(100, -100);
     delay(100);
+  } else if (angle < 0) {
+    drive_motor(-100, 100);
+    delay(100);
   }
-  while (decide(yaw, target, origin, error)) {
-    BMX055_Accl();
-    BMX055_Gyro();
-    BMX055_Mag();
+  while (decide(roll, target, origin, error)) {
     get_angle();
     if (angle > 0) {
-      drive_motor(-60, 60);
-    } else if (angle < 0) {
       drive_motor(60, -60);
+    } else if (angle < 0) {
+      drive_motor(-60, 60);
     }
     get_color();
     calculate_color();
     get_mono();
     setled(3, 3, 0);
-  }
-  Serial.println("end");
-  drive_motor(0, 0);
-  delay(100);
-}
-
-void rotate(float angle, float error) {
-  BMX055_Accl();
-  BMX055_Gyro();
-  BMX055_Mag();
-  get_angle();
-  float pres_angle = bodyrad;
-  float target = yaw + angle;
-  float origin = target;
-  if (angle > 0) {
-    if (target > PI)
-      target -= 2 * PI;
-  } else if (angle < 0) {
-    if (target < -PI)
-      target += 2 * PI;
-  }
-  Serial.println("start rotating");
-  if (angle > 0) {
-    drive_motor(-100, 100);
-    delay(100);
-  } else if (angle < 0) {
-    drive_motor(100, -100);
-    delay(100);
-  }
-  while (decide(yaw, target, origin, error)) {
-    BMX055_Accl();
-    BMX055_Gyro();
-    BMX055_Mag();
-    get_angle();
-    if (angle > 0) {
-      drive_motor(-80, 80);
-    } else if (angle < 0) {
-      drive_motor(80, -80);
-    }
-    get_color();
-    calculate_color();
-    get_mono();
-    setled(3, 3, 0);
-  }
-  while (sensors[4] == 1) {
-    get_color();
-    calculate_color();
-    get_mono();
-    if (angle > 0) {
-      drive_motor(-70, 70);
-    } else if (angle < 0) {
-      drive_motor(70, -70);
-    }
-    setled(3, 3, 3);
   }
   Serial.println("end");
   drive_motor(0, 0);
@@ -856,11 +602,11 @@ void escape() {
       get_mono();
       drive_motor(70, 70);
     }
-    rotate_NC(PI / 2, 0.2);
-    while (dist > 15) {
+    rotate_NC(PI / 2, 15);
+    while (distance[0] > 150) {
       drive_motor(70, 70);
     }
-    rotate_NC(PI / 2, 0.2);
+    rotate_NC(PI / 2, 15);
     while (sensors[3] == 1 && sensors[4] == 1 && sensors[5] == 1) {
       get_color();
       calculate_color();
@@ -871,7 +617,7 @@ void escape() {
 }
 
 void judge_obstacle() {
-  if (dist < 5 && dist != 0) {
+  if (distance[1] < 150 && distance[1] != 8888) {
     Serial.println("found obstacle");
     int now = millis() + 500;
     while (millis() < now) {
@@ -880,12 +626,12 @@ void judge_obstacle() {
       get_mono();
       drive_motor(-70, -70);
     }
-    rotate_NC(PI / 2, 0.2);
+    rotate_NC(90, 15);
     while (sensors[3] == 1 && sensors[4] == 1 && sensors[5] == 1) {
       get_mono();
       drive_motor(120, 40);
     }
-    rotate_NC(PI / 2, 0.2);
+    rotate_NC(90, 15);
     drive_motor(0, 0);
   }
 }
@@ -1008,19 +754,77 @@ void judge_green() {
       }
     }
     if (l == true && r == false) {
-      rotate(PI / 2, 0.90);
+      rotate_NC(90, 15);
     }
     if (l == false && r == true) {
-      rotate(-PI / 2, 0.90);
+      rotate_NC(-90, 15);
     }
     if (l == true && r == true) {
-      rotate(PI, 0.90);
+      rotate_NC(180, 15);
     }
     Serial.print(checkline);
     Serial.print(",");
     Serial.print(l);
     Serial.print(",");
     Serial.println(r);
+  }
+}
+
+void get_distance() {
+  SWITCH_BUS_TCA9548A(0);
+  Wire.beginTransmission(ADDRESS);
+  Wire.write(0xD3);
+  Wire.endTransmission(false);
+  Wire.requestFrom(ADDRESS, 2);
+  int data_cnt = 0;
+  distance[0] = 0;
+  int distance_tmp = 0;
+  while (Wire.available()) {
+    distance_tmp = Wire.read();
+    distance[0] = (distance[0] << (data_cnt * 8)) | distance_tmp;
+    data_cnt++;
+  }
+
+  SWITCH_BUS_TCA9548A(1);
+  Wire.beginTransmission(ADDRESS);
+  Wire.write(0xD3);
+  Wire.endTransmission(false);
+  Wire.requestFrom(ADDRESS, 2);
+  data_cnt = 0;
+  distance[1] = 0;
+  distance_tmp = 0;
+  while (Wire.available()) {
+    distance_tmp = Wire.read();
+    distance[1] = (distance[1] << (data_cnt * 8)) | distance_tmp;
+    data_cnt++;
+  }
+
+  SWITCH_BUS_TCA9548A(2);
+  Wire.beginTransmission(ADDRESS);
+  Wire.write(0xD3);
+  Wire.endTransmission(false);
+  Wire.requestFrom(ADDRESS, 2);
+  data_cnt = 0;
+  distance[2] = 0;
+  distance_tmp = 0;
+  while (Wire.available()) {
+    distance_tmp = Wire.read();
+    distance[2] = (distance[2] << (data_cnt * 8)) | distance_tmp;
+    data_cnt++;
+  }
+
+  SWITCH_BUS_TCA9548A(3);
+  Wire.beginTransmission(ADDRESS);
+  Wire.write(0xD3);
+  Wire.endTransmission(false);
+  Wire.requestFrom(ADDRESS, 2);
+  data_cnt = 0;
+  distance[3] = 0;
+  distance_tmp = 0;
+  while (Wire.available()) {
+    distance_tmp = Wire.read();
+    distance[3] = (distance[3] << (data_cnt * 8)) | distance_tmp;
+    data_cnt++;
   }
 }
 
@@ -1031,7 +835,7 @@ void setup() {
   Serial.println("Setting up i2c...");
   Wire.begin();
   Wire.setClock(400000);
-  BMX055_Init();
+  bno.begin();
   init_color();
   Serial.println("i2c Ok!");
   init_motor();
@@ -1040,20 +844,18 @@ void setup() {
 int now = 0;
 
 void loop() {
-  BMX055_Accl();
-  BMX055_Gyro();
-  BMX055_Mag();
   get_angle();
-
+  get_distance();
+  Serial.println(distance[1]);
   get_color();
   calculate_color();
   get_mono();
   // debug_mono();
   //  check_bmx();
-  judge_obstacle();
+  // judge_obstacle();
   judge_gap();
   judge_green();
-  if (bodyrad > 0.1) {
+  if (yaw > 15) {
     p_slowtrace();
   } else {
     p_linetrace();
@@ -1071,9 +873,10 @@ void loop() {
       delay(1);
     }
   }
+  /*
   // Serial.println(dist);
   // debug_mono();
-  /*Serial.print(lHSV[0]);
+  Serial.print(lHSV[0]);
   Serial.print(",");
   Serial.print(lHSV[1]);
   Serial.print(",");
@@ -1099,6 +902,13 @@ void loop() {
   Serial.print(",");
   Serial.print(rRGB[2]);
   Serial.print(",");
-  Serial.println(rColor[3]);*/
-  Serial.println(sensors[8]);
+  Serial.println(rColor[3]);
+  Serial.print(distance[0]);
+  Serial.print(",");
+  Serial.print(distance[1]);
+  Serial.print(",");
+  Serial.print(distance[2]);
+  Serial.print(",");
+  Serial.println(distance[3]);
+  */
 }
